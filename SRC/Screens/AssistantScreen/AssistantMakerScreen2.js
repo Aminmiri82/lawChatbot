@@ -90,6 +90,7 @@ function AssistantMakerScreen2({ navigation, route }) {
     try {
       const uploadPromises = files.map((file) => uploadIndividualFiles(file));
       const fileIds = await Promise.all(uploadPromises);
+      
       console.log("fileIds", fileIds);
       return fileIds;
     } catch (error) {

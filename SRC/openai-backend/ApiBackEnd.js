@@ -90,69 +90,6 @@ const addMessageToThread = async (threadId, message) => {
   }
 };
 
-const runThreadWithStreaming = async (
-  threadId,
-  assistantId,
-  
-  handleStreamedEvent,
-  setIsLoading
-) => {
-  try {
-    let apiKey = await SecureStore.getItemAsync("apiKey");
-    const runResponse = await fetch(
-      `https://api.openai.com/v1/threads/${threadId}/runs`,
-      {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${apiKey}`,
-          "OpenAI-Beta": "assistants=v2",
-        },
-        body: JSON.stringify({ assistant_id: assistantId, stream: true }),
-      }
-    );
-
-    if (!runResponse.ok) {
-      throw new Error(`HTTP error! status: ${runResponse.status}`);
-    }
-
-    const responseText = await runResponse.text();
-
-    const handleStreamedResponse = (value) => {
-      const lines = value.split("\n");
-      for (const line of lines) {
-        if (line.trim().startsWith("data:")) {
-          const data = line.trim().slice(5).trim();
-          if (data === "[DONE]") {
-            setIsLoading(false);
-          } else {
-            try {
-              const event = JSON.parse(data);
-              handleStreamedEvent(event);
-            } catch (error) {
-              console.error("Error parsing streamed response:", error);
-            }
-          }
-        }
-      }
-    };
-
-    const simulateStream = async (text) => {
-      const lines = text.split("\n");
-      for (const line of lines) {
-        if (line) {
-          handleStreamedResponse(line);
-          await new Promise((resolve) => setTimeout(resolve, 100)); // Simulate delay between chunks
-        }
-      }
-    };
-
-    await simulateStream(responseText);
-  } catch (error) {
-    console.error("Error running thread:", error);
-    setIsLoading(false);
-  }
-};
 
 const callAssistantApi = async (message, threadID, assistantId) => {
   try {
@@ -198,24 +135,24 @@ const callAssistantApi = async (message, threadID, assistantId) => {
 };
 
 const UPLOAD_URL = "https://api.openai.com/v1/uploads";
-const COMPLETE_UPLOAD_URL =
-  "https://api.openai.com/v1/uploads/{upload_id}/complete";
+const COMPLETE_UPLOAD_URL = "https://api.openai.com/v1/uploads/{upload_id}/complete";
+
 const uploadIndividualFiles = async (file) => {
   try {
     const apiKey = await SecureStore.getItemAsync("apiKey");
     const { name, size, mimeType, uri } = file;
+    console.log("Starting upload for file:", { name, size, mimeType, uri });
+    
     const upload = await createUpload(name, size, mimeType, apiKey);
+    console.log("Upload created:", upload);
+
     if (!upload.id) {
       throw new Error("Failed to create upload");
     }
 
-    const partResponse = await uploadFile(
-      upload.id,
-      uri,
-      mimeType,
-      name,
-      apiKey
-    );
+    const partResponse = await uploadFile(upload.id, uri, mimeType, name, apiKey);
+    console.log("Part uploaded:", partResponse);
+
     const partIds = [partResponse.id];
 
     if (!partResponse.id) {
@@ -223,7 +160,13 @@ const uploadIndividualFiles = async (file) => {
     }
 
     const completion = await completeUpload(upload.id, partIds, apiKey);
-    console.log("Upload Complete", `File ID: ${completion.file.id}`);
+    console.log("Upload complete:", completion);
+
+    if (!completion.file || !completion.file.id) {
+      throw new Error("Failed to complete upload");
+    }
+
+    console.log("Upload Complete, File ID:", completion.file.id);
     return completion.file.id;
   } catch (error) {
     console.error("Error uploading files:", error);
@@ -231,54 +174,97 @@ const uploadIndividualFiles = async (file) => {
   }
 };
 
-const createUpload = async (filename, fileSize, mimeType, apiKey) => {
-  const response = await fetch(UPLOAD_URL, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      filename,
-      purpose: "fine-tune",
-      bytes: fileSize,
-      mime_type: mimeType,
-    }),
-  });
-  return response.json();
-};
-const uploadFile = async (uploadId, fileUri, mimeType, filename, apiKey) => {
-  const formData = new FormData();
-  formData.append("data", {
-    uri: fileUri,
-    type: mimeType,
-    name: filename,
-  });
+const createUpload = async (filename, fileSize, mimeType, apiKey, retries = 3) => {
+  try {
+    const response = await fetch(UPLOAD_URL, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        filename,
+        purpose: "fine-tune",
+        bytes: fileSize,
+        mime_type: mimeType,
+      }),
+    });
+    const jsonResponse = await response.json();
+    console.log("Create upload response:", jsonResponse);
 
-  const response = await fetch(`${UPLOAD_URL}/${uploadId}/parts`, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      "Content-Type": "multipart/form-data",
-    },
-    body: formData,
-  });
-  return response.json();
+    if (jsonResponse.error) {
+      throw new Error(jsonResponse.error.message);
+    }
+
+    return jsonResponse;
+  } catch (error) {
+    console.error("Error creating upload:", error);
+    if (retries > 0) {
+      console.log(`Retrying create upload... (${3 - retries + 1}/3)`);
+      await new Promise(resolve => setTimeout(resolve, 1000)); // wait for 1 second before retrying
+      return createUpload(filename, fileSize, mimeType, apiKey, retries - 1);
+    } else {
+      throw error;
+    }
+  }
 };
+
+const uploadFile = async (uploadId, fileUri, mimeType, filename, apiKey) => {
+  try {
+    const formData = new FormData();
+    formData.append("data", {
+      uri: fileUri,
+      type: mimeType,
+      name: filename,
+    });
+
+    const response = await fetch(`${UPLOAD_URL}/${uploadId}/parts`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        "Content-Type": "multipart/form-data",
+      },
+      body: formData,
+    });
+    const jsonResponse = await response.json();
+    console.log("Upload part response:", jsonResponse);
+
+    if (jsonResponse.error) {
+      throw new Error(jsonResponse.error.message);
+    }
+
+    return jsonResponse;
+  } catch (error) {
+    console.error("Error uploading file part:", error);
+    throw error;
+  }
+};
+
 const completeUpload = async (uploadId, partIds, apiKey) => {
-  const response = await fetch(
-    COMPLETE_UPLOAD_URL.replace("{upload_id}", uploadId),
-    {
+  try {
+    const response = await fetch(COMPLETE_UPLOAD_URL.replace("{upload_id}", uploadId), {
       method: "POST",
       headers: {
         Authorization: `Bearer ${apiKey}`,
         "Content-Type": "application/json",
       },
       body: JSON.stringify({ part_ids: partIds }),
+    });
+    const jsonResponse = await response.json();
+    console.log("Complete upload response:", jsonResponse);
+
+    if (jsonResponse.error) {
+      throw new Error(jsonResponse.error.message);
     }
-  );
-  return response.json();
+
+    return jsonResponse;
+  } catch (error) {
+    console.error("Error completing upload:", error);
+    throw error;
+  }
 };
+
+
 
 async function createVectorStore(openaiInstance, fileIds) {
   const vectorStore = await openaiInstance.beta.vectorStores.create({

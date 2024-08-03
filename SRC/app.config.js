@@ -1,9 +1,9 @@
 export default ({ config }) => ({
     ...config,
-    name: "Persian Legal Guide",
-    slug: "persian-legal-guide",
-    version: "1.0.0",
-    runtimeVersion: "1.0.3",
+    name: "Dadafarin",
+    slug: "dadafarin",
+    version: "1.0.1",
+    runtimeVersion: "1.0.4",
     orientation: "portrait",
     icon: "./assets/icon.png",
     userInterfaceStyle: "light",
@@ -30,7 +30,7 @@ export default ({ config }) => ({
     },
     extra: {
       eas: {
-        projectId: "37368c89-9a1c-4b62-ac73-447f85b72c40"
+        projectId: "f3b394a8-3960-4dc2-be79-68cbba0851f6"
       },
       router: {
         origin: false
